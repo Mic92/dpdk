@@ -23,9 +23,11 @@
 #include <sys/time.h>
 #include <signal.h>
 #include <setjmp.h>
+#if defined(__GLIBC__)
 #ifdef F_ADD_SEALS /* if file sealing is supported, so is memfd */
 #include <linux/memfd.h>
 #define MEMFD_SUPPORTED
+#endif
 #endif
 #ifdef RTE_EAL_NUMA_AWARE_HUGEPAGES
 #include <numa.h>

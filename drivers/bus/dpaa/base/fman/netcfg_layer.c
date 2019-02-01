@@ -8,7 +8,6 @@
 #include <of.h>
 #include <net/if.h>
 #include <sys/ioctl.h>
-#include <error.h>
 #include <net/if_arp.h>
 #include <assert.h>
 #include <unistd.h>

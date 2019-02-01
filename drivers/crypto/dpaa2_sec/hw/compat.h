@@ -11,7 +11,6 @@
 #include <stdint.h>
 #include <errno.h>
 
-#ifdef __GLIBC__
 #include <string.h>
 #include <stdlib.h>
 #include <stdio.h>
@@ -22,10 +21,6 @@
 
 #ifndef __BYTE_ORDER__
 #error "Undefined endianness"
-#endif
-
-#else
-#error Environment not supported!
 #endif
 
 #ifndef __always_inline
@@ -49,7 +44,7 @@
 #endif
 #endif /* pr_debug */
 
-#if defined(__GLIBC__) && !defined(pr_err)
+#if !defined(pr_err)
 #if !defined(SUPPRESS_PRINTS)
 #define pr_err(fmt, ...) \
 	RTE_LOG(ERR, PMD, "%s(): " fmt "\n", __func__, ##__VA_ARGS__)
@@ -58,7 +53,7 @@
 #endif
 #endif /* pr_err */
 
-#if defined(__GLIBC__) && !defined(pr_warn)
+#if !defined(pr_warn)
 #if !defined(SUPPRESS_PRINTS)
 #define pr_warn(fmt, ...) \
 	RTE_LOG(WARNING, PMD, "%s(): " fmt "\n", __func__, ##__VA_ARGS__)
@@ -101,7 +96,6 @@
 #endif
 
 /* Use Linux naming convention */
-#ifdef __GLIBC__
 	#define swab16(x) rte_bswap16(x)
 	#define swab32(x) rte_bswap32(x)
 	#define swab64(x) rte_bswap64(x)
@@ -121,6 +115,5 @@
 			#define cpu_to_le32(x)	(x)
 		#endif
 	#endif
-#endif
 
 #endif /* __RTA_COMPAT_H__ */
