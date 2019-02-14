@@ -46,6 +46,7 @@
 #include <rte_lcore.h>
 #include <rte_common.h>
 #include <rte_string_fns.h>
+#include <malloc_mp.h>
 
 #include "eal_private.h"
 #include "eal_memalloc.h"
@@ -106,6 +107,24 @@ rte_mem_virt2phy(const void *virtaddr)
 	unsigned long virt_pfn;
 	int page_size;
 	off_t offset;
+
+	if (rte_eal_process_type() == RTE_PROC_SECONDARY) {
+		struct rte_mp_msg request = {};
+		struct rte_mp_reply replies;
+		struct timespec timeout = { .tv_sec = 1, .tv_nsec = 0 };
+
+		strlcpy(request.name, MP_ACTION_VIRT2PHY_REQUEST, sizeof(request.name));
+		struct malloc_mp_virt2phy *request_param = (struct malloc_mp_virt2phy *)request.param;
+		request_param->addr = virtaddr;
+		request.len_param = sizeof(*request_param);
+		int ret = rte_mp_request_sync(&request, &replies, &timeout);
+		if (ret < 0) {
+			RTE_LOG(ERR, EAL, "%s(): Failed to request memory address from primary: %d\n",
+					__func__, rte_errno);
+		}
+		struct malloc_mp_virt2phy *reply_param = (struct malloc_mp_virt2phy*)replies.msgs[0].param;
+		return (phys_addr_t)reply_param->addr;
+	}
 
 	/* Cannot parse /proc/self/pagemap, no need to log errors everywhere */
 	if (!phys_addrs_available)

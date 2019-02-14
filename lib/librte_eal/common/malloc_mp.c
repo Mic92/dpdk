@@ -229,6 +229,29 @@ fail:
 	return -1;
 }
 
+#warning "for production, you want to restrict the addresses resolved by virt2phy because of security reasons"
+static int
+handle_virt2phy_request(const struct rte_mp_msg *msg, const void *peer) {
+	struct rte_mp_msg reply;
+	const struct malloc_mp_virt2phy *req =
+			(const struct malloc_mp_virt2phy *)msg->param;
+	struct malloc_mp_virt2phy *resp =
+			(struct malloc_mp_virt2phy *)reply.param;
+	int ret;
+	fprintf(stderr, "%s(%p, %p)\n", __func__, msg, peer);
+
+	memset(&reply, 0, sizeof(reply));
+
+	resp->addr = (void*)rte_mem_virt2phy(req->addr);
+	resp->id = req->id;
+
+	strlcpy(reply.name, msg->name, sizeof(reply.name));
+	reply.len_param = sizeof(*resp);
+	rte_mp_reply(&reply, peer);
+
+	return 0;
+}
+
 /* first stage of primary handling requests from secondary */
 static int
 handle_request(const struct rte_mp_msg *msg, const void *peer __rte_unused)
@@ -723,6 +746,11 @@ register_mp_requests(void)
 {
 	if (rte_eal_process_type() == RTE_PROC_PRIMARY) {
 		if (rte_mp_action_register(MP_ACTION_REQUEST, handle_request)) {
+			RTE_LOG(ERR, EAL, "Couldn't register '%s' action\n",
+				MP_ACTION_REQUEST);
+			return -1;
+		}
+		if (rte_mp_action_register(MP_ACTION_VIRT2PHY_REQUEST, handle_virt2phy_request)) {
 			RTE_LOG(ERR, EAL, "Couldn't register '%s' action\n",
 				MP_ACTION_REQUEST);
 			return -1;

@@ -49,6 +49,13 @@ struct malloc_req_free {
 	uint64_t len;
 };
 
+#define MP_ACTION_VIRT2PHY_REQUEST "mp_virt2phy_request"
+#define MP_ACTION_VIRT2PHY_RESPONSE "mp_virt2phy_response"
+struct malloc_mp_virt2phy {
+	const void *addr;
+	uint64_t id; /**< not to be populated by caller */
+};
+
 struct malloc_mp_req {
 	enum malloc_req_type t;
 	RTE_STD_C11
