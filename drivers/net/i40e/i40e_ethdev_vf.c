@@ -1178,7 +1178,7 @@ i40evf_reset_vf(struct rte_eth_dev *dev)
 	return 0;
 }
 
-static int
+int
 i40evf_init_vf(struct rte_eth_dev *dev)
 {
 	int i, err, bufsz;
@@ -1453,7 +1453,7 @@ done:
 			  i40evf_dev_alarm_handler, dev);
 }
 
-static int
+int
 i40evf_dev_init(struct rte_eth_dev *eth_dev)
 {
 	struct i40e_hw *hw
