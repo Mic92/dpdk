@@ -43,7 +43,7 @@
 #endif
 #define PAGE_MASK   (~(PAGE_SIZE - 1))
 
-static struct rte_tailq_elem rte_vfio_tailq = {
+struct rte_tailq_elem rte_vfio_tailq = {
 	.name = "VFIO_RESOURCE_LIST",
 };
 EAL_REGISTER_TAILQ(rte_vfio_tailq)

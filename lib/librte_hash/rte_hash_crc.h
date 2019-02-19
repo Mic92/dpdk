@@ -422,7 +422,7 @@ crc32c_sse42_u64(uint64_t data, uint64_t init_val)
 #define CRC32_SSE42_x64     (CRC32_x64|CRC32_SSE42)
 #define CRC32_ARM64         (1U << 3)
 
-static uint8_t crc32_alg = CRC32_SW;
+extern uint8_t crc32_alg;
 
 #if defined(RTE_ARCH_ARM64) && defined(RTE_MACHINE_CPUFLAG_CRC32)
 #include "rte_crc_arm64.h"
@@ -448,12 +448,6 @@ rte_hash_crc_set_alg(uint8_t alg)
 		alg = CRC32_SSE42;
 #endif
 	crc32_alg = alg;
-}
-
-/* Setting the best available algorithm */
-RTE_INIT(rte_hash_crc_init_alg)
-{
-	rte_hash_crc_set_alg(CRC32_SSE42_x64);
 }
 
 /**

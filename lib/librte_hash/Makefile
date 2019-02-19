@@ -17,6 +17,7 @@ LIBABIVER := 2
 # all source are stored in SRCS-y
 SRCS-$(CONFIG_RTE_LIBRTE_HASH) := rte_cuckoo_hash.c
 SRCS-$(CONFIG_RTE_LIBRTE_HASH) += rte_fbk_hash.c
+SRCS-$(CONFIG_RTE_LIBRTE_HASH) += rte_hash_crc.c
 
 # install this header file
 SYMLINK-$(CONFIG_RTE_LIBRTE_HASH)-include := rte_hash.h
