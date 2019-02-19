@@ -365,3 +365,13 @@ EXPERIMENTAL {
 	rte_socket_count;
 	rte_socket_id_by_idx;
 };
+
+DPDK_18.08 {
+	global:
+
+	rte_config;
+	lcore_config;
+	internal_config;
+
+	local: *;
+} DPDK_2.0;

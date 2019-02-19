@@ -238,7 +238,6 @@ handle_virt2phy_request(const struct rte_mp_msg *msg, const void *peer) {
 	struct malloc_mp_virt2phy *resp =
 			(struct malloc_mp_virt2phy *)reply.param;
 	int ret;
-	fprintf(stderr, "%s(%p, %p)\n", __func__, msg, peer);
 
 	memset(&reply, 0, sizeof(reply));
 

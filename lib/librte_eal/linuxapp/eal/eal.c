@@ -82,7 +82,7 @@ static struct flock wr_lock = {
 };
 
 /* Address of global and public configuration */
-static struct rte_config rte_config = {
+struct rte_config rte_config = {
 		.mem_config = &early_mem_config,
 };
 
