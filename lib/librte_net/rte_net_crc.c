@@ -106,7 +106,7 @@ crc32_eth_calc_lut(const uint8_t *data,
 	return crc;
 }
 
-static void
+void
 rte_net_crc_scalar_init(void)
 {
 	/* 32-bit crc init */
