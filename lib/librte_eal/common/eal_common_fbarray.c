@@ -724,7 +724,8 @@ rte_fbarray_init(struct rte_fbarray *arr, const char *name, unsigned int len,
 		 * and see if we succeed. If we don't, someone else is using it
 		 * already.
 		 */
-		fd = open(path, O_CREAT | O_RDWR, 0600);
+		#warning for production-grade implementation this should be not world-readable
+		fd = open(path, O_CREAT | O_RDWR, 0666);
 		if (fd < 0) {
 			RTE_LOG(DEBUG, EAL, "%s(): couldn't open %s: %s\n",
 					__func__, path, strerror(errno));

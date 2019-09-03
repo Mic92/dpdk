@@ -265,7 +265,8 @@ static int get_segment_lock_fd(int list_idx, int seg_idx)
 	eal_get_hugefile_lock_path(path, sizeof(path),
 			list_idx * RTE_MAX_MEMSEG_PER_LIST + seg_idx);
 
-	fd = open(path, O_CREAT | O_RDWR, 0660);
+	#warning for production-grade implementation this should be not world-readable
+	fd = open(path, O_CREAT | O_RDWR, 0666);
 	if (fd < 0) {
 		RTE_LOG(ERR, EAL, "%s(): error creating lockfile '%s': %s\n",
 			__func__, path, strerror(errno));
@@ -384,7 +385,8 @@ get_seg_fd(char *path, int buflen, struct hugepage_info *hi,
 		fd = fd_list[list_idx].memseg_list_fd;
 
 		if (fd < 0) {
-			fd = open(path, O_CREAT | O_RDWR, 0600);
+			#warning for production-grade implementation this should be not world-readable
+			fd = open(path, O_CREAT | O_RDWR, 0666);
 			if (fd < 0) {
 				RTE_LOG(ERR, EAL, "%s(): open failed: %s\n",
 					__func__, strerror(errno));
@@ -407,7 +409,8 @@ get_seg_fd(char *path, int buflen, struct hugepage_info *hi,
 		fd = fd_list[list_idx].fds[seg_idx];
 
 		if (fd < 0) {
-			fd = open(path, O_CREAT | O_RDWR, 0600);
+			#warning for production-grade implementation this should be not world-readable
+			fd = open(path, O_CREAT | O_RDWR, 0666);
 			if (fd < 0) {
 				RTE_LOG(DEBUG, EAL, "%s(): open failed: %s\n",
 					__func__, strerror(errno));
@@ -897,12 +900,12 @@ alloc_seg_walk(const struct rte_memseg_list *msl, void *arg)
 			return -1;
 		}
 		/* blocking writelock */
-		if (flock(dir_fd, LOCK_EX)) {
-			RTE_LOG(ERR, EAL, "%s(): Cannot lock '%s': %s\n",
-				__func__, wa->hi->hugedir, strerror(errno));
-			close(dir_fd);
-			return -1;
-		}
+		//if (flock(dir_fd, LOCK_EX)) {
+		//	RTE_LOG(ERR, EAL, "%s(): Cannot lock '%s': %s\n",
+		//		__func__, wa->hi->hugedir, strerror(errno));
+		//	close(dir_fd);
+		//	return -1;
+		//}
 	}
 
 	for (i = 0; i < need; i++, cur_idx++) {
@@ -1358,12 +1361,12 @@ sync_existing(struct rte_memseg_list *primary_msl,
 		return -1;
 	}
 	/* blocking writelock */
-	if (flock(dir_fd, LOCK_EX)) {
-		RTE_LOG(ERR, EAL, "%s(): Cannot lock '%s': %s\n", __func__,
-			hi->hugedir, strerror(errno));
-		close(dir_fd);
-		return -1;
-	}
+	//if (flock(dir_fd, LOCK_EX)) {
+	//	RTE_LOG(ERR, EAL, "%s(): Cannot lock '%s': %s\n", __func__,
+	//		hi->hugedir, strerror(errno));
+	//	close(dir_fd);
+	//	return -1;
+	//}
 
 	/* ensure all allocated space is the same in both lists */
 	ret = sync_status(primary_msl, local_msl, hi, msl_idx, true);
