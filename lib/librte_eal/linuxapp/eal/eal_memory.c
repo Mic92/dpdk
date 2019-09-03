@@ -4,6 +4,7 @@
  */
 
 #define _FILE_OFFSET_BITS 64
+#include <assert.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <stdarg.h>
@@ -25,6 +26,9 @@
 #include <sys/time.h>
 #include <signal.h>
 #include <setjmp.h>
+#include <unistd.h>
+#include <spawn.h>
+#include <sys/wait.h>
 #if defined(__GLIBC__)
 #ifdef F_ADD_SEALS /* if file sealing is supported, so is memfd */
 #include <linux/memfd.h>
@@ -96,6 +100,126 @@ test_phys_addrs_available(void)
 	}
 }
 
+static int virt2phy_stdin_fd = -1;
+static FILE* virt2phy_stdout_file = NULL;
+static char *virt2phy_prog = "sgx-lkl-virt2phy";
+
+static int spawn_virt2phy_proc() {
+	int stdout_fds[2] = {};
+	int stdin_fds[2] = {};
+
+	if (pipe(stdin_fds) == -1) {
+		RTE_LOG(ERR, EAL, "%s(): cannot create pipe: %s\n", __func__,
+						strerror(errno));
+		return -1;
+	}
+
+	if (pipe(stdout_fds) == -1) {
+		RTE_LOG(ERR, EAL, "%s(): cannot create pipe: %s\n", __func__,
+						strerror(errno));
+		return -1;
+	}
+
+	char* argv[] = {virt2phy_prog, NULL /* pid */, NULL};
+	char pid_arg[255];
+	snprintf(pid_arg, sizeof(pid_arg), "%d", getpid());
+	argv[1] = pid_arg;
+
+	posix_spawn_file_actions_t actions;
+	posix_spawn_file_actions_init(&actions);
+	posix_spawn_file_actions_addclose(&actions, stdin_fds[1]);
+	posix_spawn_file_actions_adddup2(&actions, stdin_fds[0], 0);
+	posix_spawn_file_actions_addclose(&actions, stdin_fds[0]);
+
+	posix_spawn_file_actions_addclose(&actions, stdout_fds[0]);
+	posix_spawn_file_actions_adddup2(&actions, stdout_fds[1], 1);
+	posix_spawn_file_actions_addclose(&actions, stdout_fds[1]);
+
+	pid_t pid;
+	int r = posix_spawnp(&pid, virt2phy_prog, &actions, NULL, argv, environ);
+	if (r != 0) {
+		RTE_LOG(ERR, EAL, "%s(): posix_spawnp(%s) failed: %s\n",
+						__func__, virt2phy_prog, strerror(errno));
+		return -1;
+	}
+	close(stdin_fds[0]);
+	close(stdout_fds[1]);
+	virt2phy_stdin_fd = stdin_fds[1];
+	virt2phy_stdout_file = fdopen(stdout_fds[0], "r");
+	if (!virt2phy_stdout_file) {
+		RTE_LOG(ERR, EAL, "%s(): fdopen() failed: %s\n",
+						__func__, strerror(errno));
+		return -1;
+	}
+	return 0;
+}
+
+int loop_write(int fd, const void *buf, size_t nbytes) {
+	const uint8_t *p = buf;
+
+	assert(fd >= 0);
+	assert(buf);
+
+	if (nbytes > (size_t)SSIZE_MAX)
+		return -EINVAL;
+
+	do {
+		ssize_t k;
+
+		k = write(fd, p, nbytes);
+		if (k < 0) {
+			if (errno == EINTR)
+				continue;
+
+			return -errno;
+		}
+
+		if (nbytes > 0 && k == 0) /* Can't really happen */
+			return -EIO;
+
+		assert((size_t)k <= nbytes);
+
+		p += k;
+		nbytes -= k;
+	} while (nbytes > 0);
+
+	return 0;
+}
+
+static phys_addr_t virt2phy_unprivileged(const void *virtaddr) {
+	phys_addr_t addr = RTE_BAD_IOVA;
+	char buf[256];
+
+	// first call is not thread-safe
+	if (virt2phy_stdin_fd == -1) {
+		if (spawn_virt2phy_proc() < 0) {
+			return RTE_BAD_IOVA;
+		};
+	}
+	int len = snprintf(buf, sizeof(buf), "%lu\n", (uint64_t)virtaddr);
+	if (len > sizeof(buf)) {
+		RTE_LOG(ERR, EAL, "%s(): buffer too small to write physical address\n", __func__);
+		return RTE_BAD_IOVA;
+	}
+	int r = loop_write(virt2phy_stdin_fd, buf, len);
+	if (r != 0) {
+		RTE_LOG(ERR, EAL, "%s(): failed to write to virt2phy process: %s\n", __func__, strerror(-r));
+	}
+	char * line = NULL;
+	size_t line_len = 0;
+
+	int bytes_read = getline(&line, &line_len, virt2phy_stdout_file);
+
+	if (bytes_read <= 0) {
+		RTE_LOG(ERR, EAL, "%s(): failed to read physical address from %s: %s\n",
+						__func__, virt2phy_prog, strerror(errno));
+	} else {
+		addr = strtoul(line, NULL, 0);
+	}
+
+	return addr;
+}
+
 /*
  * Get physical address of any mapped virtual address in the current process.
  */
@@ -108,22 +232,26 @@ rte_mem_virt2phy(const void *virtaddr)
 	int page_size;
 	off_t offset;
 
-	if (rte_eal_process_type() == RTE_PROC_SECONDARY) {
-		struct rte_mp_msg request = {};
-		struct rte_mp_reply replies;
-		struct timespec timeout = { .tv_sec = 1, .tv_nsec = 0 };
+	// FIXME: does not work if rte_mem_virt2phy is called from mp_handle()
+	//if (rte_eal_process_type() == RTE_PROC_SECONDARY) {
+	//	struct rte_mp_msg request = {};
+	//	struct rte_mp_reply replies;
+	//	struct timespec timeout = { .tv_sec = 3, .tv_nsec = 0 };
 
-		strlcpy(request.name, MP_ACTION_VIRT2PHY_REQUEST, sizeof(request.name));
-		struct malloc_mp_virt2phy *request_param = (struct malloc_mp_virt2phy *)request.param;
-		request_param->addr = virtaddr;
-		request.len_param = sizeof(*request_param);
-		int ret = rte_mp_request_sync(&request, &replies, &timeout);
-		if (ret < 0) {
-			RTE_LOG(ERR, EAL, "%s(): Failed to request memory address from primary: %d\n",
-					__func__, rte_errno);
-		}
-		struct malloc_mp_virt2phy *reply_param = (struct malloc_mp_virt2phy*)replies.msgs[0].param;
-		return (phys_addr_t)reply_param->addr;
+	//	strlcpy(request.name, MP_ACTION_VIRT2PHY_REQUEST, sizeof(request.name));
+	//	struct malloc_mp_virt2phy *request_param = (struct malloc_mp_virt2phy *)request.param;
+	//	request_param->addr = virtaddr;
+	//	request.len_param = sizeof(*request_param);
+	//	int ret = rte_mp_request_sync(&request, &replies, &timeout);
+	//	if (ret < 0) {
+	//		RTE_LOG(ERR, EAL, "%s(): Failed to request memory address from primary: %s\n",
+  //            __func__, strerror(rte_errno));
+	//	}
+	//	struct malloc_mp_virt2phy *reply_param = (struct malloc_mp_virt2phy*)replies.msgs[0].param;
+	//	return (phys_addr_t)reply_param->addr;
+	//}
+	if (rte_eal_process_type() == RTE_PROC_SECONDARY) {
+		return virt2phy_unprivileged(virtaddr);
 	}
 
 	/* Cannot parse /proc/self/pagemap, no need to log errors everywhere */
