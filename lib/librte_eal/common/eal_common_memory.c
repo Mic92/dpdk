@@ -60,7 +60,7 @@ void *
 eal_get_virtual_area(void *requested_addr, size_t *size,
 		size_t page_sz, int flags, int mmap_flags)
 {
-	bool addr_is_hint, allow_shrink, unmap, no_align;
+	bool addr_is_hint, allow_shrink, unmap, no_align, skip_baseaddr;
 	uint64_t map_sz;
 	void *mapped_addr, *aligned_addr;
 
@@ -70,7 +70,7 @@ eal_get_virtual_area(void *requested_addr, size_t *size,
 	mmap_flags |= MAP_PRIVATE | MAP_ANONYMOUS;
 
 	RTE_LOG(DEBUG, EAL, "Ask a virtual area of 0x%zx bytes\n", *size);
-
+	skip_baseaddr = (flags & EAL_VIRTUAL_AREA_SKIP_BASEADDR) > 0;
 	addr_is_hint = (flags & EAL_VIRTUAL_AREA_ADDR_IS_HINT) > 0;
 	allow_shrink = (flags & EAL_VIRTUAL_AREA_ALLOW_SHRINK) > 0;
 	unmap = (flags & EAL_VIRTUAL_AREA_UNMAP) > 0;
@@ -113,6 +113,7 @@ eal_get_virtual_area(void *requested_addr, size_t *size,
 
 		mapped_addr = mmap(requested_addr, (size_t)map_sz, PROT_READ,
 				mmap_flags, -1, 0);
+
 		if (mapped_addr == MAP_FAILED && allow_shrink)
 			*size -= page_sz;
 
@@ -156,7 +157,7 @@ eal_get_virtual_area(void *requested_addr, size_t *size,
 		RTE_LOG(WARNING, EAL, "WARNING! Base virtual address hint (%p != %p) not respected!\n",
 			requested_addr, aligned_addr);
 		RTE_LOG(WARNING, EAL, "   This may cause issues with mapping memory into secondary processes\n");
-	} else if (next_baseaddr != NULL) {
+	} else if (!skip_baseaddr && next_baseaddr != NULL) {
 		next_baseaddr = RTE_PTR_ADD(aligned_addr, *size);
 	}
 

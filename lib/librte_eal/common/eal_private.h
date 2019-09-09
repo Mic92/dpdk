@@ -175,6 +175,8 @@ int rte_eal_check_module(const char *module_name);
  */
 #define EAL_VIRTUAL_AREA_UNMAP (1 << 2)
 /**< immediately unmap reserved virtual area. */
+#define EAL_VIRTUAL_AREA_SKIP_BASEADDR (1 << 3)
+/**< don't update next_baseaddr after mmapping file */
 void *
 eal_get_virtual_area(void *requested_addr, size_t *size,
 		size_t page_sz, int flags, int mmap_flags);

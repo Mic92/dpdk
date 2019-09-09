@@ -45,6 +45,7 @@ SRCS-$(CONFIG_RTE_EXEC_ENV_LINUXAPP) += eal_timer.c
 SRCS-$(CONFIG_RTE_EXEC_ENV_LINUXAPP) += eal_interrupts.c
 SRCS-$(CONFIG_RTE_EXEC_ENV_LINUXAPP) += eal_alarm.c
 SRCS-$(CONFIG_RTE_EXEC_ENV_LINUXAPP) += eal_dev.c
+SRCS-$(CONFIG_RTE_EXEC_ENV_LINUXAPP) += eal_io.c
 
 # from common dir
 SRCS-$(CONFIG_RTE_EXEC_ENV_LINUXAPP) += eal_common_lcore.c

@@ -19,6 +19,7 @@
 
 #include "eal_filesystem.h"
 #include "eal_private.h"
+#include "eal_io.h"
 
 #include "rte_fbarray.h"
 
@@ -677,6 +678,49 @@ fully_validate(const char *name, unsigned int elt_sz, unsigned int len)
 	return 0;
 }
 
+#if __GNUC__ && (__x86_64__ || __ppc64__)
+#else
+#error "require 64-bit"
+#endif
+
+void **next_fbarray_address = NULL;
+
+static void **setup_next_fbarray_address(void) {
+	int fd;
+	char path[PATH_MAX];
+	snprintf(path, sizeof(path), "%s/%s", rte_eal_get_runtime_dir(), "next-fbarray-address");
+
+	if (rte_eal_process_type() == RTE_PROC_PRIMARY) {
+	    #warning for production-grade implementation this should be not world-readable
+		fd = open(path, O_CREAT|O_RDWR|O_TRUNC, 0666);
+		if (fd < 0) {
+			rte_errno = errno;
+			return MAP_FAILED;
+		}
+		const void* default_addr =(void*) 0x300000000000;
+		int r = loop_write(fd, &default_addr, sizeof(void*));
+		if (r < 0) {
+			rte_errno = -r;
+			return MAP_FAILED;
+		}
+	} else {
+		fd = open(path, O_RDWR, 0666);
+		if (fd < 0) {
+			rte_errno = errno;
+			return MAP_FAILED;
+		}
+	}
+
+	void **data = (void**) mmap(NULL, sizeof(void*), PROT_WRITE|PROT_READ, MAP_SHARED, fd, 0);
+	if (data == MAP_FAILED) {
+		RTE_LOG(DEBUG, EAL, "%s(): couldn't remap anonymous memory: %s\n",
+				__func__, strerror(errno));
+		rte_errno = errno;
+		return MAP_FAILED;
+	}
+	return data;
+}
+
 int __rte_experimental
 rte_fbarray_init(struct rte_fbarray *arr, const char *name, unsigned int len,
 		unsigned int elt_sz)
@@ -702,9 +746,18 @@ rte_fbarray_init(struct rte_fbarray *arr, const char *name, unsigned int len,
 	/* calculate our memory limits */
 	mmap_len = calc_data_size(page_sz, elt_sz, len);
 
-	data = eal_get_virtual_area(NULL, &mmap_len, page_sz, 0, 0);
-	if (data == NULL)
+	if (!next_fbarray_address) {
+		next_fbarray_address = setup_next_fbarray_address();
+		if (next_fbarray_address == MAP_FAILED) {
+		  goto fail;
+		}
+	}
+
+	data = eal_get_virtual_area(*next_fbarray_address, &mmap_len, page_sz, EAL_VIRTUAL_AREA_SKIP_BASEADDR, 0);
+	if (data == NULL) {
 		goto fail;
+	}
+	*next_fbarray_address = RTE_PTR_ADD(data, mmap_len);
 
 	if (internal_config.no_shconf) {
 		/* remap virtual area as writable */
