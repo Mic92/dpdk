@@ -12,8 +12,10 @@
  */
 
 #include <stdint.h>
+#ifndef __KERNEL__
 #include <sched.h>
 #include <time.h>
+#endif
 
 #include <rte_config.h>
 #include <rte_compat.h>

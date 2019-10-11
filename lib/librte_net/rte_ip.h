@@ -14,9 +14,11 @@
  *
  * IP-related defines
  */
-
 #include <stdint.h>
+#ifndef __KERNEL__
 #include <netinet/in.h>
+#endif
+
 
 #include <rte_byteorder.h>
 #include <rte_mbuf.h>

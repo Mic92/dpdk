@@ -37,8 +37,10 @@
 #include <stdlib.h>
 #include <stdint.h>
 #include <errno.h>
-#include <inttypes.h>
 #include <sys/queue.h>
+#ifndef __KERNEL__
+#include <inttypes.h>
+#endif
 
 #include <rte_config.h>
 #include <rte_spinlock.h>

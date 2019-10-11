@@ -85,6 +85,9 @@ static inline int is_same_ether_addr(const struct ether_addr *ea1,
 	return 1;
 }
 
+#ifdef __KERNEL__
+#include <linux/etherdevice.h>
+#else
 /**
  * Check if an Ethernet address is filled with zeros.
  *
@@ -239,6 +242,7 @@ static inline void ether_addr_copy(const struct ether_addr *ea_from,
 	*ea_to = *ea_from;
 #endif
 }
+#endif
 
 #define ETHER_ADDR_FMT_SIZE         18
 /**

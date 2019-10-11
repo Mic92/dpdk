@@ -22,7 +22,14 @@
 extern "C" {
 #endif
 
+#ifdef __KERNEL__
+// definitions taken from musl...
+typedef	unsigned long pthread_t;
+typedef struct pthread_attr pthread_attr_t;
+typedef struct cpu_set_t { unsigned long __bits[128/sizeof(long)]; } cpu_set_t;
+#else
 #include <pthread.h>
+#endif
 
 /**
  * Macro to define a per lcore variable "var" of type "type", don't

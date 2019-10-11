@@ -68,7 +68,9 @@ enum rte_page_sizes {
  */
 #define __rte_cache_min_aligned __rte_aligned(RTE_CACHE_LINE_MIN_SIZE)
 
+#ifndef __KERNEL__
 typedef uint64_t phys_addr_t; /**< Physical address. */
+#endif
 #define RTE_BAD_PHYS_ADDR ((phys_addr_t)-1)
 /**
  * IO virtual address type.
