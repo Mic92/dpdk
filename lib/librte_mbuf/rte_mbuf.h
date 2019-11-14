@@ -395,6 +395,8 @@ extern "C" {
 
 #define IND_ATTACHED_MBUF    (1ULL << 62) /**< Indirect attached mbuf */
 
+#define EXT_USERDATA_ON_FREE (1ULL << 63)
+
 /** Alignment constraint of mbuf private area. */
 #define RTE_MBUF_PRIV_ALIGN 8
 
@@ -1679,8 +1681,11 @@ __rte_pktmbuf_free_extbuf(struct rte_mbuf *m)
 	RTE_ASSERT(RTE_MBUF_HAS_EXTBUF(m));
 	RTE_ASSERT(m->shinfo != NULL);
 
-	if (rte_mbuf_ext_refcnt_update(m->shinfo, -1) == 0)
+	if (m->ol_flags & EXT_USERDATA_ON_FREE) {
+		m->shinfo->free_cb(m->buf_addr, m->userdata);
+	} else if (rte_mbuf_ext_refcnt_update(m->shinfo, -1) == 0) {
 		m->shinfo->free_cb(m->buf_addr, m->shinfo->fcb_opaque);
+	}
 }
 
 /**
