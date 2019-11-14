@@ -217,7 +217,7 @@
 /* Bit mask of Extended Tag enable/disable */
 #define PCI_DEV_CTRL_EXT_TAG_MASK  (1 << PCI_DEV_CTRL_EXT_TAG_SHIFT)
 
-static int eth_i40e_dev_init(struct rte_eth_dev *eth_dev, void *init_params);
+int eth_i40e_dev_init(struct rte_eth_dev *eth_dev, void *init_params);
 static int eth_i40e_dev_uninit(struct rte_eth_dev *eth_dev);
 static int i40e_dev_configure(struct rte_eth_dev *dev);
 static int i40e_dev_start(struct rte_eth_dev *dev);
@@ -1264,7 +1264,7 @@ i40e_use_latest_vec(struct rte_eth_dev *dev)
 
 #define I40E_ALARM_INTERVAL 50000 /* us */
 
-static int
+int
 eth_i40e_dev_init(struct rte_eth_dev *dev, void *init_params __rte_unused)
 {
 	struct rte_pci_device *pci_dev;
