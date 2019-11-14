@@ -3092,7 +3092,8 @@ i40e_set_tx_function(struct rte_eth_dev *dev)
 		}
 	}
 
-	if (ad->tx_simple_allowed) {
+	// always used xmit_pkts to have tx offloading
+	if (ad->tx_simple_allowed && 0) {
 		if (ad->tx_vec_allowed) {
 			PMD_INIT_LOG(DEBUG, "Vector tx finally be used.");
 			if (ad->use_latest_vec)
