@@ -37,6 +37,37 @@
 
 #define I40E_DMA_MEM_ALIGN 4096
 
+/* The size limit for a transmit buffer in a descriptor is (16K - 1).
+ * In order to align with the read requests we will align the value to
+ * the nearest 4K which represents our maximum read request size.
+ */
+#define I40E_MAX_READ_REQ_SIZE		4096
+#define I40E_MAX_DATA_PER_TXD		(16 * 1024 - 1)
+#define I40E_MAX_DATA_PER_TXD_ALIGNED \
+	(I40E_MAX_DATA_PER_TXD & ~(I40E_MAX_READ_REQ_SIZE - 1))
+
+/**
+ * i40e_xmit_descriptor_count - calculate number of Tx descriptors needed
+ * @mb:     send buffer
+ **/
+static inline uint16_t i40e_xmit_descriptor_count(struct rte_mbuf *mb)
+{
+	uint16_t count = mb->nb_segs;
+
+	for (struct rte_mbuf *seg = mb; seg != NULL; seg = seg->next) {
+		uint16_t len = seg->data_len;
+		unsigned int max_data = I40E_MAX_DATA_PER_TXD_ALIGNED + (-rte_mbuf_data_iova(seg) & (I40E_MAX_READ_REQ_SIZE - 1));
+
+		while (unlikely(len > I40E_MAX_DATA_PER_TXD)) {
+			len -= max_data;
+			max_data = I40E_MAX_DATA_PER_TXD_ALIGNED;
+			count++;
+		}
+	}
+
+	return count;
+}
+
 /* Base address of the HW descriptor ring should be 128B aligned. */
 #define I40E_RING_BASE_ALIGN	128
 
@@ -1060,7 +1091,7 @@ i40e_xmit_pkts(void *tx_queue, struct rte_mbuf **tx_pkts, uint16_t nb_pkts)
 		 * a packet equals to the number of the segments of that
 		 * packet plus 1 context descriptor if needed.
 		 */
-		nb_used = (uint16_t)(tx_pkt->nb_segs + nb_ctx);
+		nb_used = (uint16_t)(i40e_xmit_descriptor_count(tx_pkt) + nb_ctx);
 		tx_last = (uint16_t)(tx_id + nb_used - 1);
 
 		/* Circular ring */
@@ -1162,6 +1193,7 @@ i40e_xmit_pkts(void *tx_queue, struct rte_mbuf **tx_pkts, uint16_t nb_pkts)
 
 		m_seg = tx_pkt;
 		do {
+			unsigned int max_data = I40E_MAX_DATA_PER_TXD_ALIGNED;
 			txd = &txr[tx_id];
 			txn = &sw_ring[txe->next_id];
 
@@ -1172,6 +1204,24 @@ i40e_xmit_pkts(void *tx_queue, struct rte_mbuf **tx_pkts, uint16_t nb_pkts)
 			/* Setup TX Descriptor */
 			slen = m_seg->data_len;
 			buf_dma_addr = rte_mbuf_data_iova(m_seg);
+
+			/* align size to end of page */
+			max_data += -buf_dma_addr & (I40E_MAX_READ_REQ_SIZE - 1);
+
+			while (unlikely(slen > I40E_MAX_DATA_PER_TXD)) {
+				txd->buffer_addr = rte_cpu_to_le_64(buf_dma_addr);
+				txd->cmd_type_offset_bsz = i40e_build_ctob(td_cmd, td_offset, max_data, td_tag);
+
+				buf_dma_addr += max_data;
+				slen -= max_data;
+				max_data = I40E_MAX_DATA_PER_TXD_ALIGNED;
+
+				txe->last_id = tx_last;
+				tx_id = txe->next_id;
+				txe = txn;
+				txd = &txr[tx_id];
+				txn = &sw_ring[txe->next_id];
+			}
 
 			PMD_TX_LOG(DEBUG, "mbuf: %p, TDD[%u]:\n"
 				"buf_dma_addr: %#"PRIx64";\n"
