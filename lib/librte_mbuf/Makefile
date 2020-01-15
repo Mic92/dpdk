@@ -16,9 +16,9 @@ EXPORT_MAP := rte_mbuf_version.map
 LIBABIVER := 5
 
 # all source are stored in SRCS-y
-SRCS-$(CONFIG_RTE_LIBRTE_MBUF) := rte_mbuf.c rte_mbuf_ptype.c rte_mbuf_pool_ops.c
+SRCS-$(CONFIG_RTE_LIBRTE_MBUF) := rte_mbuf.c rte_mbuf_ptype.c rte_mbuf_pool_ops.c rte_skb.c
 
 # install includes
-SYMLINK-$(CONFIG_RTE_LIBRTE_MBUF)-include := rte_mbuf.h rte_mbuf_ptype.h rte_mbuf_pool_ops.h
+SYMLINK-$(CONFIG_RTE_LIBRTE_MBUF)-include := rte_mbuf.h rte_mbuf_ptype.h rte_mbuf_pool_ops.h rte_skb.h
 
 include $(RTE_SDK)/mk/rte.lib.mk

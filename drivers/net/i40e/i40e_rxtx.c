@@ -20,6 +20,7 @@
 #include <rte_ethdev_driver.h>
 #include <rte_tcp.h>
 #include <rte_sctp.h>
+#include <rte_skb.h>
 #include <rte_udp.h>
 #include <rte_ip.h>
 #include <rte_net.h>
@@ -684,6 +685,32 @@ i40e_recv_pkts_bulk_alloc(void __rte_unused *rx_queue,
 }
 #endif /* RTE_LIBRTE_I40E_RX_ALLOW_BULK_ALLOC */
 
+static
+int    
+i40e_attach_skb_to_mbuf(struct i40e_rx_queue *rxq, size_t i) {
+	volatile union i40e_rx_desc *rxd = &rxq->rx_ring[i];
+	struct rte_mbuf *mbuf = rxq->sw_ring[i].mbuf;
+	int r = rte_attach_skb(mbuf);
+	if (r != 0) {
+		return r;
+	}
+	rxd->read.pkt_addr =
+		rte_cpu_to_le_64(rte_mbuf_data_iova_default(mbuf));
+	return 0;
+}
+
+int
+i40e_attach_skb_to_rx_queue(struct rte_eth_dev *dev, uint16_t rx_queue_id) {
+	struct i40e_rx_queue *rxq = dev->data->rx_queues[rx_queue_id];
+	for (size_t i = 0; i < rxq->nb_rx_desc; i++) {
+		int r = i40e_attach_skb_to_mbuf(rxq, i);
+		if (r != 0) {
+			return r;
+		}
+	}
+	return 0;
+}
+
 uint16_t
 i40e_recv_pkts(void *rx_queue, struct rte_mbuf **rx_pkts, uint16_t nb_pkts)
 {
@@ -700,7 +727,7 @@ i40e_recv_pkts(void *rx_queue, struct rte_mbuf **rx_pkts, uint16_t nb_pkts)
 	uint32_t rx_status;
 	uint64_t qword1;
 	uint16_t rx_packet_len;
-	uint16_t rx_id, nb_hold;
+	uint16_t rx_id, old_rx_id, nb_hold;
 	uint64_t dma_addr;
 	uint64_t pkt_flags;
 	uint32_t *ptype_tbl;
@@ -724,6 +751,7 @@ i40e_recv_pkts(void *rx_queue, struct rte_mbuf **rx_pkts, uint16_t nb_pkts)
 			break;
 
 		nmb = rte_mbuf_raw_alloc(rxq->mp);
+
 		if (unlikely(!nmb)) {
 			dev = I40E_VSI_TO_ETH_DEV(rxq->vsi);
 			dev->data->rx_mbuf_alloc_failed++;
@@ -733,6 +761,7 @@ i40e_recv_pkts(void *rx_queue, struct rte_mbuf **rx_pkts, uint16_t nb_pkts)
 		rxd = *rxdp;
 		nb_hold++;
 		rxe = &sw_ring[rx_id];
+		old_rx_id = rx_id;
 		rx_id++;
 		if (unlikely(rx_id == rxq->nb_rx_desc))
 			rx_id = 0;
@@ -755,6 +784,12 @@ i40e_recv_pkts(void *rx_queue, struct rte_mbuf **rx_pkts, uint16_t nb_pkts)
 			rte_cpu_to_le_64(rte_mbuf_data_iova_default(nmb));
 		rxdp->read.hdr_addr = 0;
 		rxdp->read.pkt_addr = dma_addr;
+		int r = i40e_attach_skb_to_mbuf(rxq, old_rx_id);
+		if (unlikely(r != 0)) {
+			dev = I40E_VSI_TO_ETH_DEV(rxq->vsi);
+			dev->data->rx_mbuf_alloc_failed++;
+			break;
+		}
 
 		rx_packet_len = ((qword1 & I40E_RXD_QW1_LENGTH_PBUF_MASK) >>
 				I40E_RXD_QW1_LENGTH_PBUF_SHIFT) - rxq->crc_len;
@@ -2594,6 +2629,7 @@ i40e_tx_queue_init(struct i40e_tx_queue *txq)
 	return err;
 }
 
+
 int
 i40e_alloc_rx_queue_mbufs(struct i40e_rx_queue *rxq)
 {
@@ -3052,6 +3088,8 @@ i40e_set_rx_function(struct rte_eth_dev *dev)
 					i40e_recv_scattered_pkts :
 					i40e_recv_pkts;
 	}
+
+	dev->rx_pkt_burst = i40e_recv_pkts;
 
 	/* Propagate information about RX function choice through all queues. */
 	if (rte_eal_process_type() == RTE_PROC_PRIMARY) {

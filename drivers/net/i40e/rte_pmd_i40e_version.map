@@ -66,4 +66,5 @@ DPDK_18.02 {
 	rte_pmd_i40e_inset_set;
 	i40evf_dev_init;
 	eth_i40e_dev_init;
+	i40e_attach_skb_to_rx_queue;
 } DPDK_17.11;
