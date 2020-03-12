@@ -2,6 +2,7 @@
  * Copyright(c) 2010-2016 Intel Corporation
  */
 
+#include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -700,12 +701,14 @@ i40e_attach_skb_to_mbuf(struct i40e_rx_queue *rxq, size_t i) {
 }
 
 int
-i40e_attach_skb_to_rx_queue(struct rte_eth_dev *dev, uint16_t rx_queue_id) {
-	struct i40e_rx_queue *rxq = dev->data->rx_queues[rx_queue_id];
-	for (size_t i = 0; i < rxq->nb_rx_desc; i++) {
-		int r = i40e_attach_skb_to_mbuf(rxq, i);
-		if (r != 0) {
-			return r;
+i40e_attach_skb_to_rx_queues(struct rte_eth_dev *dev) {
+	for (int i = 0; i < dev->data->nb_rx_queues; i++) {
+		struct i40e_rx_queue *rxq = dev->data->rx_queues[i];
+		for (size_t j = 0; j < rxq->nb_rx_desc; j++) {
+			int r = i40e_attach_skb_to_mbuf(rxq, j);
+			if (r != 0) {
+				return r;
+			}
 		}
 	}
 	return 0;
@@ -1068,6 +1071,66 @@ i40e_set_tso_ctx(struct rte_mbuf *mbuf, union i40e_tx_offload tx_offload)
 	return ctx_desc;
 }
 
+static inline uint32_t i40e_get_head(struct i40e_tx_queue *txq) {
+	volatile uint32_t *head = (volatile uint32_t*) &txq->tx_ring[txq->nb_tx_desc];
+	return rte_le_to_cpu_32(*head);
+}
+
+void __i40_print_queue_status(struct i40e_tx_queue *txq) {
+	for (unsigned i = 0 ; i < txq->nb_tx_desc; i++) {
+		int printf(const char* f,...); printf("%s() at %s:%d: %u, %p\n", __func__, __FILE__, __LINE__, i, txq->sw_ring[i].mbuf);
+	}
+	uint32_t tx_head = i40e_get_head(txq);
+	int printf(const char* f,...); printf("%s() at %s:%d: free: %u, next_dd: %u, head: %u tail: %u\n", __func__, __FILE__, __LINE__, txq->nb_tx_free, txq->tx_next_dd, tx_head, txq->tx_tail);
+}
+
+
+void i40_print_queue_status(int port_id, int queue_id) {
+	struct i40e_tx_queue *txq = rte_eth_devices[port_id].data->tx_queues[queue_id];
+	return __i40_print_queue_status(txq);
+}
+
+static int i40e_tx_free_all_bufs(struct i40e_tx_queue *txq) {
+	uint32_t tx_head = i40e_get_head(txq);
+	struct i40e_tx_entry *txn = &txq->sw_ring[txq->tx_next_dd];
+	int freed = 0;
+
+	if (unlikely(txq->tx_next_dd == tx_head)) {
+		return 0;
+	}
+
+	pthread_mutex_lock(&txq->mutex);
+
+	while (txn->next_id != tx_head) {
+		rte_prefetch0(txn->mbuf);
+		txn = &txq->sw_ring[txn->next_id];
+	}
+
+	txn = &txq->sw_ring[txq->tx_next_dd];
+
+	while (txn->next_id != tx_head) {
+		if (txn->mbuf) {
+			rte_pktmbuf_free_seg(txn->mbuf);
+			txn->mbuf = NULL;
+		}
+		freed++;
+		if (txn->next_id == tx_head) {
+			break;
+		}
+		txq->tx_next_dd = txn->next_id;
+		txn = &txq->sw_ring[txn->next_id];
+	}
+	txq->nb_tx_free += freed;
+
+	pthread_mutex_unlock(&txq->mutex);
+	return freed;
+}
+
+void i40_clean_queue(int port_id, int queue_id) {
+	struct i40e_tx_queue *txq = rte_eth_devices[port_id].data->tx_queues[queue_id];
+	i40e_tx_free_all_bufs(txq);
+};
+
 uint16_t
 i40e_xmit_pkts(void *tx_queue, struct rte_mbuf **tx_pkts, uint16_t nb_pkts)
 {
@@ -1099,8 +1162,7 @@ i40e_xmit_pkts(void *tx_queue, struct rte_mbuf **tx_pkts, uint16_t nb_pkts)
 	txe = &sw_ring[tx_id];
 
 	/* Check if the descriptor ring needs to be cleaned. */
-	if (txq->nb_tx_free < txq->tx_free_thresh)
-		i40e_xmit_cleanup(txq);
+	i40e_tx_free_all_bufs(txq);
 
 	for (nb_tx = 0; nb_tx < nb_pkts; nb_tx++) {
 		td_cmd = 0;
@@ -1134,14 +1196,14 @@ i40e_xmit_pkts(void *tx_queue, struct rte_mbuf **tx_pkts, uint16_t nb_pkts)
 			tx_last = (uint16_t)(tx_last - txq->nb_tx_desc);
 
 		if (nb_used > txq->nb_tx_free) {
-			if (i40e_xmit_cleanup(txq) != 0) {
+			if (i40e_tx_free_all_bufs(txq) != 0) {
 				if (nb_tx == 0)
 					return 0;
 				goto end_of_tx;
 			}
 			if (unlikely(nb_used > txq->tx_rs_thresh)) {
 				while (nb_used > txq->nb_tx_free) {
-					if (i40e_xmit_cleanup(txq) != 0) {
+					if (i40e_tx_free_all_bufs(txq) != 0) {
 						if (nb_tx == 0)
 							return 0;
 						goto end_of_tx;
@@ -1232,8 +1294,14 @@ i40e_xmit_pkts(void *tx_queue, struct rte_mbuf **tx_pkts, uint16_t nb_pkts)
 			txd = &txr[tx_id];
 			txn = &sw_ring[txe->next_id];
 
-			if (txe->mbuf)
-				rte_pktmbuf_free_seg(txe->mbuf);
+			if (txe->mbuf) {
+				pthread_mutex_lock(&txq->mutex);
+				if (txe->mbuf == NULL) {
+					rte_pktmbuf_free_seg(txe->mbuf);
+					txe->mbuf = NULL;
+				}
+				pthread_mutex_unlock(&txq->mutex);
+			}
 			txe->mbuf = m_seg;
 
 			/* Setup TX Descriptor */
@@ -1278,6 +1346,7 @@ i40e_xmit_pkts(void *tx_queue, struct rte_mbuf **tx_pkts, uint16_t nb_pkts)
 
 		/* The last packet data descriptor needs End Of Packet (EOP) */
 		td_cmd |= I40E_TX_DESC_CMD_EOP;
+
 		txq->nb_tx_used = (uint16_t)(txq->nb_tx_used + nb_used);
 		txq->nb_tx_free = (uint16_t)(txq->nb_tx_free - nb_used);
 
@@ -1329,13 +1398,17 @@ i40e_tx_free_bufs(struct i40e_tx_queue *txq)
 
 	if (txq->offloads & DEV_TX_OFFLOAD_MBUF_FAST_FREE) {
 		for (i = 0; i < txq->tx_rs_thresh; ++i, ++txep) {
-			rte_mempool_put(txep->mbuf->pool, txep->mbuf);
-			txep->mbuf = NULL;
+			if (txep->mbuf) {
+				rte_mempool_put(txep->mbuf->pool, txep->mbuf);
+				txep->mbuf = NULL;
+			}
 		}
 	} else {
 		for (i = 0; i < txq->tx_rs_thresh; ++i, ++txep) {
-			rte_pktmbuf_free_seg(txep->mbuf);
-			txep->mbuf = NULL;
+			if (txep->mbuf) {
+				rte_pktmbuf_free_seg(txep->mbuf);
+				txep->mbuf = NULL;
+			}
 		}
 	}
 
@@ -2329,6 +2402,10 @@ i40e_dev_tx_queue_setup(struct rte_eth_dev *dev,
 
 	/* Allocate TX hardware ring descriptors. */
 	ring_size = sizeof(struct i40e_tx_desc) * I40E_MAX_RING_DESC;
+	/* add u32 for head writeback, align after this takes care of
+	 * guaranteeing this is at least one cache line in size
+	 */
+	ring_size += sizeof(u32);
 	ring_size = RTE_ALIGN(ring_size, I40E_DMA_MEM_ALIGN);
 	tz = rte_eth_dma_zone_reserve(dev, "tx_ring", queue_idx,
 			      ring_size, I40E_RING_BASE_ALIGN, socket_id);
@@ -2571,7 +2648,7 @@ i40e_reset_tx_queue(struct i40e_tx_queue *txq)
 		prev = i;
 	}
 
-	txq->tx_next_dd = (uint16_t)(txq->tx_rs_thresh - 1);
+	txq->tx_next_dd = 0;
 	txq->tx_next_rs = (uint16_t)(txq->tx_rs_thresh - 1);
 
 	txq->tx_tail = 0;
@@ -2597,6 +2674,12 @@ i40e_tx_queue_init(struct i40e_tx_queue *txq)
 	tx_ctx.new_context = 1;
 	tx_ctx.base = txq->tx_ring_phys_addr / I40E_QUEUE_BASE_ADDR_UNIT;
 	tx_ctx.qlen = txq->nb_tx_desc;
+	tx_ctx.head_wb_ena = 1;
+	tx_ctx.head_wb_addr = txq->tx_ring_phys_addr +
+			      (sizeof(struct i40e_tx_desc) * txq->nb_tx_desc);
+	pthread_mutex_init(&txq->mutex, NULL);
+
+	txq->tx_next_dd = 0;
 
 #ifdef RTE_LIBRTE_IEEE1588
 	tx_ctx.timesync_ena = 1;
