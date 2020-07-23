@@ -251,6 +251,8 @@ static int get_segment_lock_fd(int list_idx, int seg_idx)
 {
 	char path[PATH_MAX] = {0};
 	int fd;
+	uid_t ruid, euid, suid;
+	int r;
 
 	if (list_idx < 0 || list_idx >= (int)RTE_DIM(fd_list))
 		return -1;
@@ -265,13 +267,28 @@ static int get_segment_lock_fd(int list_idx, int seg_idx)
 	eal_get_hugefile_lock_path(path, sizeof(path),
 			list_idx * RTE_MAX_MEMSEG_PER_LIST + seg_idx);
 
-	#warning for production-grade implementation this should be not world-readable
-	fd = open(path, O_CREAT | O_RDWR, 0666);
+	r = getresuid(&ruid, &euid, &suid);
+	if (r < 0) {
+		RTE_LOG(ERR, EAL, "failed to getresuid(): %s\n", strerror(errno));
+		return -1;
+	}
+
+	int printf(const char* f,...); printf("\033[31;1m%s() at %s:%d: %d \033[0m\n", __func__, __FILE__, __LINE__, getuid());
+
+	fd = open(path, O_CREAT | O_RDWR, 0600);
 	if (fd < 0) {
 		RTE_LOG(ERR, EAL, "%s(): error creating lockfile '%s': %s\n",
 			__func__, path, strerror(errno));
 		return -1;
 	}
+
+	r = fchown(fd, ruid, -1);
+	if (r < 0) {
+		RTE_LOG(ERR, EAL, "failed to chown %s: %s\n", path, strerror(errno));
+		close(fd);
+		return -1;
+	}
+
 	/* take out a read lock */
 	if (lock(fd, LOCK_SH) != 1) {
 		RTE_LOG(ERR, EAL, "%s(): failed to take out a readlock on '%s': %s\n",
@@ -371,6 +388,8 @@ get_seg_fd(char *path, int buflen, struct hugepage_info *hi,
 		unsigned int list_idx, unsigned int seg_idx)
 {
 	int fd;
+	int r;
+	uid_t ruid, euid, suid;
 
 	/* for in-memory mode, we only make it here when we're sure we support
 	 * memfd, and this is a special case.
@@ -385,11 +404,24 @@ get_seg_fd(char *path, int buflen, struct hugepage_info *hi,
 		fd = fd_list[list_idx].memseg_list_fd;
 
 		if (fd < 0) {
-			#warning for production-grade implementation this should be not world-readable
-			fd = open(path, O_CREAT | O_RDWR, 0666);
+			r = getresuid(&ruid, &euid, &suid);
+			if (r < 0) {
+				RTE_LOG(ERR, EAL, "%s(): getresuid() failed: %s\n",
+						__func__, strerror(errno));
+				return -1;
+			}
+			fd = open(path, O_CREAT | O_RDWR, 0600);
 			if (fd < 0) {
 				RTE_LOG(ERR, EAL, "%s(): open failed: %s\n",
 					__func__, strerror(errno));
+				return -1;
+			}
+			int printf(const char* f,...); printf("\033[31;1m%s() at %s:%d: %d \033[0m\n", __func__, __FILE__, __LINE__, getuid());
+			r = fchown(fd, ruid, -1);
+			if (r < 0) {
+				RTE_LOG(ERR, EAL, "%s(): chown of %s failed: %s\n",
+					__func__, path, strerror(errno));
+				close(fd);
 				return -1;
 			}
 			/* take out a read lock and keep it indefinitely */
@@ -409,13 +441,27 @@ get_seg_fd(char *path, int buflen, struct hugepage_info *hi,
 		fd = fd_list[list_idx].fds[seg_idx];
 
 		if (fd < 0) {
-			#warning for production-grade implementation this should be not world-readable
-			fd = open(path, O_CREAT | O_RDWR, 0666);
+			r = getresuid(&ruid, &euid, &suid);
+			if (r < 0) {
+				RTE_LOG(ERR, EAL, "%s(): chown of %s failed: %s\n",
+					__func__, path, strerror(errno));
+			}
+
+			fd = open(path, O_CREAT | O_RDWR, 0600);
+
 			if (fd < 0) {
 				RTE_LOG(DEBUG, EAL, "%s(): open failed: %s\n",
 					__func__, strerror(errno));
 				return -1;
 			}
+			r = fchown(fd, ruid, -1);
+			if (r < 0) {
+				RTE_LOG(ERR, EAL, "%s(): chown of %s failed: %s\n",
+					__func__, path, strerror(errno));
+				close(fd);
+				return -1;
+			}
+
 			/* take out a read lock */
 			if (lock(fd, LOCK_SH) < 0) {
 				RTE_LOG(ERR, EAL, "%s(): lock failed: %s\n",
@@ -644,7 +690,10 @@ alloc_seg(struct rte_memseg *ms, void *addr, int socket_id,
 		/* takes out a read lock on segment or segment list */
 		fd = get_seg_fd(path, sizeof(path), hi, list_idx, seg_idx);
 		if (fd < 0) {
-			RTE_LOG(ERR, EAL, "Couldn't get fd on hugepage file\n");
+			char buf[255];
+			sprintf(buf, "ls -la %s", path);
+			system(buf);
+			RTE_LOG(ERR, EAL, "Couldn't get fd on hugepage file: %s\n", path);
 			return -1;
 		}
 

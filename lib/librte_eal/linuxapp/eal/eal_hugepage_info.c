@@ -45,9 +45,23 @@ static void *
 map_shared_memory(const char *filename, const size_t mem_size, int flags)
 {
 	void *retval;
-	int fd = open(filename, flags, 0666);
+	uid_t ruid, euid, suid;
+	int r = getresuid(&ruid, &euid, &suid);
+	if (r < 0) {
+		return NULL;
+	}
+	int fd = open(filename, flags, 0600);
 	if (fd < 0)
 		return NULL;
+
+	if ((flags & O_CREAT) != 0) {
+		r = fchown(fd, ruid, -1);
+		if (r < 0) {
+			close(fd);
+			return NULL;
+		}
+	}
+
 	if (ftruncate(fd, mem_size) < 0) {
 		close(fd);
 		return NULL;

@@ -691,20 +691,31 @@ static void **setup_next_fbarray_address(void) {
 	snprintf(path, sizeof(path), "%s/%s", rte_eal_get_runtime_dir(), "next-fbarray-address");
 
 	if (rte_eal_process_type() == RTE_PROC_PRIMARY) {
-	    #warning for production-grade implementation this should be not world-readable
-		fd = open(path, O_CREAT|O_RDWR|O_TRUNC, 0666);
+		uid_t ruid, euid, suid;
+		int r = getresuid(&ruid, &euid, &suid);
+		if (r < 0) {
+			rte_errno = errno;
+			return MAP_FAILED;
+		}
+		fd = open(path, O_CREAT|O_RDWR|O_TRUNC, 0600);
 		if (fd < 0) {
 			rte_errno = errno;
 			return MAP_FAILED;
 		}
+		r = fchown(fd, ruid, -1);
+		if (r < 0) {
+			rte_errno = errno;
+			close(fd);
+			return MAP_FAILED;
+		}
 		const void* default_addr =(void*) 0x300000000000;
-		int r = loop_write(fd, &default_addr, sizeof(void*));
+		r = loop_write(fd, &default_addr, sizeof(void*));
 		if (r < 0) {
 			rte_errno = -r;
 			return MAP_FAILED;
 		}
 	} else {
-		fd = open(path, O_RDWR, 0666);
+		fd = open(path, O_RDWR, 0600);
 		if (fd < 0) {
 			rte_errno = errno;
 			return MAP_FAILED;
@@ -730,6 +741,8 @@ rte_fbarray_init(struct rte_fbarray *arr, const char *name, unsigned int len,
 	struct used_mask *msk;
 	void *data = NULL;
 	int fd = -1;
+	uid_t ruid, euid, suid;
+	int r;
 
 	if (arr == NULL) {
 		rte_errno = EINVAL;
@@ -777,10 +790,22 @@ rte_fbarray_init(struct rte_fbarray *arr, const char *name, unsigned int len,
 		 * and see if we succeed. If we don't, someone else is using it
 		 * already.
 		 */
-		#warning for production-grade implementation this should be not world-readable
-		fd = open(path, O_CREAT | O_RDWR, 0666);
+		int r = getresuid(&ruid, &euid, &suid);
+		if (r < 0) {
+			RTE_LOG(ERR, EAL, "failed to getresuid(): %s\n", strerror(errno));
+			rte_errno = errno;
+			goto fail;
+		}
+
+		fd = open(path, O_CREAT | O_RDWR, 0600);
+
 		if (fd < 0) {
 			RTE_LOG(DEBUG, EAL, "%s(): couldn't open %s: %s\n",
+					__func__, path, strerror(errno));
+			rte_errno = errno;
+			goto fail;
+		} else if (fchown(fd, ruid, -1) < 0) {
+			RTE_LOG(DEBUG, EAL, "%s(): couldn't fchown %s: %s\n",
 					__func__, path, strerror(errno));
 			rte_errno = errno;
 			goto fail;

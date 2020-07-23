@@ -532,9 +532,24 @@ open_socket_fd(void)
 
 	unlink(un.sun_path); /* May still exist since last run */
 
+	uid_t ruid, euid, suid;
+	int r = getresuid(&ruid, &euid, &suid);
+	if (r < 0) {
+		RTE_LOG(ERR, EAL, "failed to getresuid(): %s\n", strerror(errno));
+	}
+
 	if (bind(mp_fd, (struct sockaddr *)&un, sizeof(un)) < 0) {
 		RTE_LOG(ERR, EAL, "failed to bind %s: %s\n",
 			un.sun_path, strerror(errno));
+		close(mp_fd);
+		return -1;
+	}
+
+	r = fchown(mp_fd, ruid, -1);
+	if (r < 0) {
+		RTE_LOG(ERR, EAL, "failed to chown %s: %s\n",
+			un.sun_path, strerror(errno));
+		unlink(un.sun_path);
 		close(mp_fd);
 		return -1;
 	}

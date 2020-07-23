@@ -103,19 +103,19 @@ static const char *default_runtime_dir = "/var/run";
 int
 eal_create_runtime_dir(void)
 {
+	uid_t ruid, euid, suid;
 	const char *directory = default_runtime_dir;
 	const char *xdg_runtime_dir = getenv("XDG_RUNTIME_DIR");
 	const char *fallback = "/tmp";
 	char tmp[PATH_MAX];
 	int ret;
 
-	if (getuid() != 0) {
-		/* try XDG path first, fall back to /tmp */
-		if (xdg_runtime_dir != NULL)
-			directory = xdg_runtime_dir;
-		else
-			directory = fallback;
-	}
+	/* try XDG path first, fall back to /tmp */
+	if (xdg_runtime_dir != NULL)
+		directory = xdg_runtime_dir;
+	else
+		directory = fallback;
+
 	/* create DPDK subdirectory under runtime dir */
 	ret = snprintf(tmp, sizeof(tmp), "%s/dpdk", directory);
 	if (ret < 0 || ret == sizeof(tmp)) {
@@ -134,11 +134,20 @@ eal_create_runtime_dir(void)
 	/* create the path if it doesn't exist. no "mkdir -p" here, so do it
 	 * step by step.
 	 */
+	ret = getresuid(&ruid, &euid, &suid);
+	if (ret < 0) {
+		RTE_LOG(ERR, EAL, "failed to getresuid(): %s\n", strerror(errno));
+	}
 	ret = mkdir(tmp, 0700);
 	if (ret < 0 && errno != EEXIST) {
 		RTE_LOG(ERR, EAL, "Error creating '%s': %s\n",
 			tmp, strerror(errno));
 		return -1;
+	}
+	ret = chown(tmp, ruid, -1);
+	if (ret < 0) {
+		RTE_LOG(ERR, EAL, "Error chowning '%s': %s\n",
+			tmp, strerror(errno));
 	}
 
 	ret = mkdir(runtime_dir, 0700);
@@ -146,6 +155,11 @@ eal_create_runtime_dir(void)
 		RTE_LOG(ERR, EAL, "Error creating '%s': %s\n",
 			runtime_dir, strerror(errno));
 		return -1;
+	}
+	ret = chown(runtime_dir, ruid, -1);
+	if (ret < 0) {
+		RTE_LOG(ERR, EAL, "Error chowning '%s': %s\n",
+			runtime_dir, strerror(errno));
 	}
 
 	return 0;
@@ -304,6 +318,7 @@ static void
 rte_eal_config_create(void)
 {
 	void *rte_mem_cfg_addr;
+	uid_t ruid, euid, suid;
 	int retval;
 
 	const char *pathname = eal_runtime_config_path();
@@ -319,10 +334,21 @@ rte_eal_config_create(void)
 	else
 		rte_mem_cfg_addr = NULL;
 
+	retval = getresuid(&ruid, &euid, &suid);
+	if (retval < 0) {
+		rte_panic("getresuid() failed: %s\n", strerror(errno));
+	}
+
 	if (mem_cfg_fd < 0){
-		mem_cfg_fd = open(pathname, O_RDWR | O_CREAT, 0660);
+		mem_cfg_fd = open(pathname, O_RDWR | O_CREAT, 0600);
 		if (mem_cfg_fd < 0)
 			rte_panic("Cannot open '%s' for rte_mem_config\n", pathname);
+
+			retval = fchown(mem_cfg_fd, ruid, -1);
+			if (retval < 0) {
+				rte_panic("Cannot fchown '%s' for rte_mem_config: %s\n", pathname, strerror(errno));
+				return -1;
+			}
 	}
 
 	retval = ftruncate(mem_cfg_fd, sizeof(*rte_config.mem_config));

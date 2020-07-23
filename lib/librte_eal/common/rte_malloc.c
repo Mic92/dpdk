@@ -31,8 +31,9 @@
 void rte_free(void *addr)
 {
 	if (addr == NULL) return;
-	if (malloc_heap_free(malloc_elem_from_data(addr)) < 0)
+	if (malloc_heap_free(malloc_elem_from_data(addr)) < 0) {
 		RTE_LOG(ERR, EAL, "Error: Invalid memory\n");
+	}
 }
 
 /*

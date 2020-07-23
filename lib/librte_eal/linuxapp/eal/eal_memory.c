@@ -382,6 +382,8 @@ map_all_hugepages(struct hugepage_file *hugepg_tbl, struct hugepage_info *hpi,
 {
 	int fd;
 	unsigned i;
+	int r;
+	uid_t ruid, euid, suid;
 	void *virtaddr;
 #ifdef RTE_EAL_NUMA_AWARE_HUGEPAGES
 	int node_id = -1;
@@ -455,13 +457,28 @@ map_all_hugepages(struct hugepage_file *hugepg_tbl, struct hugepage_info *hpi,
 				hpi->hugedir, hf->file_id);
 		hf->filepath[sizeof(hf->filepath) - 1] = '\0';
 
+		int printf(const char* f,...); printf("\033[31;1m%s() at %s:%d: %d \033[0m\n", __func__, __FILE__, __LINE__, getuid());
+
+		r = getresuid(&ruid, &euid, &suid);
+		if (r < 0) {
+			RTE_LOG(ERR, EAL, "failed to getresuid(): %s\n", strerror(errno));
+			goto out;
+		}
+
 		/* try to create hugepage file */
-		#warning for production-grade implementation this should be not world-readable
-		fd = open(hf->filepath, O_CREAT | O_RDWR, 0666);
+		fd = open(hf->filepath, O_CREAT | O_RDWR, 0600);
 		if (fd < 0) {
 			RTE_LOG(DEBUG, EAL, "%s(): open failed: %s\n", __func__,
 					strerror(errno));
 			goto out;
+		}
+
+		r = fchown(fd, ruid, -1);
+		if (r < 0) {
+			RTE_LOG(ERR, EAL, "failed to chown %s: %s\n",
+					hf->filepath, strerror(errno));
+			close(fd);
+			return -1;
 		}
 
 		/* map the segment, and populate page tables,
@@ -648,7 +665,8 @@ static void *
 create_shared_memory(const char *filename, const size_t mem_size)
 {
 	void *retval;
-	int fd;
+	int fd, r;
+	uid_t ruid, euid, suid;
 
 	/* if no shared files mode is used, create anonymous memory instead */
 	if (internal_config.no_shconf) {
@@ -659,10 +677,21 @@ create_shared_memory(const char *filename, const size_t mem_size)
 		return retval;
 	}
 
-	#warning for production-grade implementation this should be not world-readable
-	fd = open(filename, O_CREAT | O_RDWR, 0666);
+	r = getresuid(&ruid, &euid, &suid);
+	if (r < 0) {
+		return NULL;
+	}
+
+	fd = open(filename, O_CREAT | O_RDWR, 0600);
+
 	if (fd < 0)
 		return NULL;
+
+	r = fchown(fd, ruid, -1);
+	if (r < 0) {
+		return NULL;
+	}
+
 	if (ftruncate(fd, mem_size) < 0) {
 		close(fd);
 		return NULL;
