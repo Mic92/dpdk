@@ -31,6 +31,7 @@
 #include "base/i40e_type.h"
 #include "i40e_ethdev.h"
 #include "i40e_rxtx.h"
+#include "rte_eth_ctrl.h"
 
 #define DEFAULT_TX_RS_THRESH   32
 #define DEFAULT_TX_FREE_THRESH 32
@@ -1131,6 +1132,108 @@ void i40_clean_queue(int port_id, int queue_id) {
 	i40e_tx_free_all_bufs(txq);
 };
 
+#define I40E_DEFAULT_ATR_SAMPLE_RATE 20
+
+static struct tcp_hdr *i40e_prepare_atr(struct i40e_tx_queue *tx_ring, struct rte_mbuf *tx_pkt, uint64_t ol_flags) {
+	union {
+		unsigned char *network;
+		struct ipv4_hdr *ipv4;
+		struct ipv6_hdr *ipv6;
+	} hdr;
+	unsigned int hlen = 0;
+	struct tcp_hdr *th = NULL;
+	int l4_proto = 0;
+	hdr.network = NULL;
+
+	struct i40e_hw *hw = I40E_VSI_TO_HW(tx_ring->vsi);
+
+	/* Currently only IPv4 with TCP is supported */
+	if (!(ol_flags & PKT_TX_IPV4)) {
+		return NULL;
+	}
+
+	/* snag network header to get L4 type and address */
+	// TODO the original code also took care of udp tunnel here, we don't
+	hdr.network = rte_pktmbuf_mtod_offset(tx_pkt, unsigned char*, tx_pkt->l2_len);
+
+	/* Note: tx_flags gets modified to reflect inner protocols in
+	 * tx_enable_csum function if encap is enabled.
+	 */
+	/* access ihl as u8 to avoid unaligned access on ia64 */
+	hlen = (hdr.network[0] & 0x0F) << 2;
+	l4_proto = hdr.ipv4->next_proto_id;
+
+	if (l4_proto != IPPROTO_TCP) {
+		return NULL;
+	}
+
+	th = (struct tcp_hdr *)(hdr.network + hlen);
+
+	tx_ring->atr_count++;
+
+	/* sample on all syn/fin/rst packets or once every atr sample rate */
+	if (!((th->tcp_flags & TCP_FIN_FLAG ||
+		   th->tcp_flags & TCP_SYN_FLAG ||
+		   th->tcp_flags & TCP_RST_FLAG ||
+		   tx_ring->atr_count >= I40E_DEFAULT_ATR_SAMPLE_RATE))) {
+		return NULL;
+	}
+
+	tx_ring->atr_count = 0;
+
+	return th;
+}
+
+enum i40e_fd_stat_idx {
+	I40E_FD_STAT_ATR,
+	I40E_FD_STAT_SB,
+	I40E_FD_STAT_ATR_TUNNEL,
+	I40E_FD_STAT_PF_COUNT
+};
+
+#define I40E_FD_ATR_STAT_IDX(pf_id) \
+			(pf_id * I40E_FD_STAT_PF_COUNT + I40E_FD_STAT_ATR)
+
+static void i40e_do_atr(struct i40e_tx_queue *tx_ring, struct tcp_hdr *th, uint32_t ol_flags, volatile struct i40e_filter_program_desc *fdir_desc)
+{
+	struct i40e_hw *hw = I40E_VSI_TO_HW(tx_ring->vsi);
+	uint32_t flex_ptype, dtype_cmd;
+
+	flex_ptype = (tx_ring->queue_id << I40E_TXD_FLTR_QW0_QINDEX_SHIFT) &
+		      I40E_TXD_FLTR_QW0_QINDEX_MASK;
+	flex_ptype |= (ol_flags & PKT_TX_IPV4) ?
+		      (I40E_FILTER_PCTYPE_NONF_IPV4_TCP <<
+		       I40E_TXD_FLTR_QW0_PCTYPE_SHIFT) :
+		      (I40E_FILTER_PCTYPE_NONF_IPV6_TCP <<
+		       I40E_TXD_FLTR_QW0_PCTYPE_SHIFT);
+
+	flex_ptype |= tx_ring->vsi->vsi_id << I40E_TXD_FLTR_QW0_DEST_VSI_SHIFT;
+
+	dtype_cmd = I40E_TX_DESC_DTYPE_FILTER_PROG;
+
+	dtype_cmd |= (th->tcp_flags & TCP_FIN_FLAG || th->tcp_flags & TCP_RST_FLAG) ?
+		     (I40E_FILTER_PROGRAM_DESC_PCMD_REMOVE <<
+		      I40E_TXD_FLTR_QW1_PCMD_SHIFT) :
+		     (I40E_FILTER_PROGRAM_DESC_PCMD_ADD_UPDATE <<
+		      I40E_TXD_FLTR_QW1_PCMD_SHIFT);
+
+	dtype_cmd |= I40E_FILTER_PROGRAM_DESC_DEST_DIRECT_PACKET_QINDEX <<
+		     I40E_TXD_FLTR_QW1_DEST_SHIFT;
+
+	dtype_cmd |= I40E_FILTER_PROGRAM_DESC_FD_STATUS_FD_ID <<
+		     I40E_TXD_FLTR_QW1_FD_STATUS_SHIFT;
+
+	dtype_cmd |= I40E_TXD_FLTR_QW1_CNT_ENA_MASK;
+	dtype_cmd |= ((uint32_t)I40E_FD_ATR_STAT_IDX(hw->pf_id) <<
+				  I40E_TXD_FLTR_QW1_CNTINDEX_SHIFT) &
+		I40E_TXD_FLTR_QW1_CNTINDEX_MASK;
+
+	fdir_desc->qindex_flex_ptype_vsi = cpu_to_le32(flex_ptype);
+	fdir_desc->rsvd = cpu_to_le32(0);
+	fdir_desc->dtype_cmd_cntindex = cpu_to_le32(dtype_cmd);
+	fdir_desc->fd_id = cpu_to_le32(0);
+}
+
 uint16_t
 i40e_xmit_pkts(void *tx_queue, struct rte_mbuf **tx_pkts, uint16_t nb_pkts)
 {
@@ -1153,6 +1256,7 @@ i40e_xmit_pkts(void *tx_queue, struct rte_mbuf **tx_pkts, uint16_t nb_pkts)
 	uint16_t tx_last;
 	uint16_t slen;
 	uint64_t buf_dma_addr;
+	struct tcp_hdr *atr_ctx = NULL;
 	union i40e_tx_offload tx_offload = {0};
 
 	txq = tx_queue;
@@ -1182,12 +1286,14 @@ i40e_xmit_pkts(void *tx_queue, struct rte_mbuf **tx_pkts, uint16_t nb_pkts)
 
 		/* Calculate the number of context descriptors needed. */
 		nb_ctx = i40e_calc_context_desc(ol_flags);
+		atr_ctx = i40e_prepare_atr(txq, tx_pkt, ol_flags);
 
 		/**
 		 * The number of descriptors that must be allocated for
 		 * a packet equals to the number of the segments of that
 		 * packet plus 1 context descriptor if needed.
 		 */
+		nb_used = (uint16_t)(i40e_xmit_descriptor_count(tx_pkt) + nb_ctx + (atr_ctx ? 1 : 0));
 		nb_used = (uint16_t)(i40e_xmit_descriptor_count(tx_pkt) + nb_ctx);
 		tx_last = (uint16_t)(tx_id + nb_used - 1);
 
@@ -1283,6 +1389,16 @@ i40e_xmit_pkts(void *tx_queue, struct rte_mbuf **tx_pkts, uint16_t nb_pkts)
 				ctx_txd->rsvd,
 				ctx_txd->type_cmd_tso_mss);
 
+			txe->last_id = tx_last;
+			tx_id = txe->next_id;
+			txe = txn;
+		}
+
+		if (atr_ctx) {
+			volatile struct i40e_filter_program_desc *fdir_desc =
+				(volatile struct i40e_filter_program_desc *)\
+							&txr[tx_id];
+			i40e_do_atr(txq, atr_ctx, ol_flags, fdir_desc);
 			txe->last_id = tx_last;
 			tx_id = txe->next_id;
 			txe = txn;

@@ -142,6 +142,7 @@ struct i40e_tx_queue {
 	uint8_t pthresh; /**< Prefetch threshold register. */
 	uint8_t hthresh; /**< Host threshold register. */
 	uint8_t wthresh; /**< Write-back threshold reg. */
+	uint8_t atr_count;
 	uint16_t port_id; /**< Device port identifier. */
 	uint16_t queue_id; /**< TX queue index. */
 	uint16_t reg_idx;
