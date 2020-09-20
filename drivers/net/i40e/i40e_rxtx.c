@@ -1073,15 +1073,18 @@ i40e_set_tso_ctx(struct rte_mbuf *mbuf, union i40e_tx_offload tx_offload)
 
 static inline uint32_t i40e_get_head(struct i40e_tx_queue *txq) {
 	volatile uint32_t *head = (volatile uint32_t*) &txq->tx_ring[txq->nb_tx_desc];
+
 	return rte_le_to_cpu_32(*head);
 }
 
 void __i40_print_queue_status(struct i40e_tx_queue *txq) {
 	for (unsigned i = 0 ; i < txq->nb_tx_desc; i++) {
-		int printf(const char* f,...); printf("%s() at %s:%d: %u, %p\n", __func__, __FILE__, __LINE__, i, txq->sw_ring[i].mbuf);
+		printf("%u=%p, ", i, txq->sw_ring[i].mbuf);
 	}
+	puts("\n");
+
 	uint32_t tx_head = i40e_get_head(txq);
-	int printf(const char* f,...); printf("%s() at %s:%d: free: %u, next_dd: %u, head: %u tail: %u\n", __func__, __FILE__, __LINE__, txq->nb_tx_free, txq->tx_next_dd, tx_head, txq->tx_tail);
+	printf("%s() at %s:%d: free: %u, next_dd: %u, head: %u tail: %u\n", __func__, __FILE__, __LINE__, txq->nb_tx_free, txq->tx_next_dd, tx_head, txq->tx_tail);
 }
 
 
@@ -1126,9 +1129,9 @@ static int i40e_tx_free_all_bufs(struct i40e_tx_queue *txq) {
 	return freed;
 }
 
-void i40_clean_queue(int port_id, int queue_id) {
+int i40_clean_queue(int port_id, int queue_id) {
 	struct i40e_tx_queue *txq = rte_eth_devices[port_id].data->tx_queues[queue_id];
-	i40e_tx_free_all_bufs(txq);
+	return i40e_tx_free_all_bufs(txq);
 };
 
 uint16_t
@@ -1282,6 +1285,16 @@ i40e_xmit_pkts(void *tx_queue, struct rte_mbuf **tx_pkts, uint16_t nb_pkts)
 				ctx_txd->l2tag2,
 				ctx_txd->rsvd,
 				ctx_txd->type_cmd_tso_mss);
+			//fprintf(stderr, "[RX] mbuf: %p, buf_addr: %p, TCD[%u]:\n"
+			//	"tunneling_params: %#x;\n"
+			//	"l2tag2: %#hx;\n"
+			//	"rsvd: %#hx;\n"
+			//	"type_cmd_tso_mss: %#"PRIx64";\n",
+			//	tx_pkt, tx_pkt->buf_addr, tx_id,
+			//	ctx_txd->tunneling_params,
+			//	ctx_txd->l2tag2,
+			//	ctx_txd->rsvd,
+			//	ctx_txd->type_cmd_tso_mss);
 
 			txe->last_id = tx_last;
 			tx_id = txe->next_id;
@@ -1334,6 +1347,15 @@ i40e_xmit_pkts(void *tx_queue, struct rte_mbuf **tx_pkts, uint16_t nb_pkts)
 				"td_tag: %#x;\n",
 				tx_pkt, tx_id, buf_dma_addr,
 				td_cmd, td_offset, slen, td_tag);
+			//fprintf(stderr, "[TX] mbuf: %p, TDD[%u]:\n"
+			//	"buf_dma_addr: %#"PRIx64";\n"
+			//	"buf_addr: %p;\n"
+			//	"td_cmd: %#x;\n"
+			//	"td_offset: %#x;\n"
+			//	"td_len: %u;\n"
+			//	"td_tag: %#x;\n",
+			//	tx_pkt, tx_id, buf_dma_addr, tx_pkt->buf_addr,
+			//	td_cmd, td_offset, slen, td_tag);
 
 			txd->buffer_addr = rte_cpu_to_le_64(buf_dma_addr);
 			txd->cmd_type_offset_bsz = i40e_build_ctob(td_cmd,
