@@ -143,7 +143,12 @@ static void __attribute__((destructor(RTE_PRIO(prio)), used)) func(void)
 /**
  * Force a function to be inlined
  */
+#ifdef __KERNEL__
+#define __rte_always_inline
+#else
+// this blows up my stack in the kernel
 #define __rte_always_inline inline __attribute__((always_inline))
+#endif
 
 /**
  * Force a function to be noinlined
